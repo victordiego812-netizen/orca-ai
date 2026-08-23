@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/analisar.js": {
+      "maxDuration": 30
+    }
+  }
+}
