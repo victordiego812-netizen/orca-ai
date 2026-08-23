@@ -2,6 +2,8 @@ const Busboy = require('busboy');
 
 const MAX_FILES = 4;
 const MAX_FILE_SIZE = 4 * 1024 * 1024;
+const FASE1_CITY = 'Sorocaba';
+const MATERIAL_STANDARD = 'tinta acrílica standard/intermediária e insumos equivalentes';
 
 function parseNumber(value) {
   if (!value) return null;
@@ -12,6 +14,10 @@ function parseNumber(value) {
 function parseIntSafe(value) {
   const n = parseInt(String(value || '0').replace(/[^0-9]/g, ''), 10);
   return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
+function normalizeText(value) {
+  return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
 }
 
 function parseMultipart(req) {
@@ -78,14 +84,13 @@ function getSorocabaPrice({ analysis, fields }) {
   const area = estimateArea(fields);
   const complexity = analysis.complexidade || 'media';
 
-  // Fase 1: referências de mercado 2026 para Sorocaba/SP e interior paulista.
-  // Mão de obra: repintura ~R$12-30/m²; com correções/massa ~R$18-45/m².
-  // Materiais standard: faixa operacional aproximada R$8-18/m², variando por preparo e cobertura.
   const laborPerM2 = {
     baixa: [12, 20],
     media: [18, 30],
     alta: [28, 45]
   };
+
+  // Materiais da Fase 1: padrão standard/intermediário, nunca premium nem linha econômica extrema.
   const materialPerM2 = {
     baixa: [8, 12],
     media: [10, 16],
@@ -101,28 +106,24 @@ function getSorocabaPrice({ analysis, fields }) {
     let materialMin = area.paintArea * mMin;
     let materialMax = area.paintArea * mMax;
 
-    // Serviços pequenos costumam ter preço mínimo por deslocamento/preparação.
     laborMin = Math.max(laborMin, 220);
     laborMax = Math.max(laborMax, 320);
     materialMin = Math.max(materialMin, 80);
     materialMax = Math.max(materialMax, 130);
 
-    const totalMin = laborMin + materialMin;
-    const totalMax = laborMax + materialMax;
-
     return {
-      min: round10(totalMin),
-      max: round10(totalMax),
+      min: round10(laborMin + materialMin),
+      max: round10(laborMax + materialMax),
       mao_obra: { min: round10(laborMin), max: round10(laborMax) },
       materiais: { min: round10(materialMin), max: round10(materialMax) },
       area_estimada_m2: area.paintArea,
       calculo_por_medidas: true,
       regiao_referencia: 'Sorocaba/SP',
-      base_calculo: 'medidas informadas + complexidade visual + faixas de mercado de Sorocaba/SP (2026)'
+      padrao_material: 'standard/intermediário',
+      base_calculo: 'medidas informadas + complexidade visual + mão de obra regional + materiais standard/intermediários'
     };
   }
 
-  // Sem metragem: triagem ampla, deliberadamente conservadora.
   const roomBase = {
     'Sala': [700, 1450],
     'Quarto': [550, 1150],
@@ -137,7 +138,6 @@ function getSorocabaPrice({ analysis, fields }) {
   max *= factor;
   if (fields.ceiling === 'sim') { min *= 1.12; max *= 1.2; }
 
-  // Sem medidas, não fingimos separar material e mão de obra com precisão.
   return {
     min: round10(min),
     max: round10(max),
@@ -146,7 +146,8 @@ function getSorocabaPrice({ analysis, fields }) {
     area_estimada_m2: null,
     calculo_por_medidas: false,
     regiao_referencia: 'Sorocaba/SP',
-    base_calculo: 'triagem visual sem metragem confirmada; faixa regional ampla de Sorocaba/SP (2026)'
+    padrao_material: 'standard/intermediário',
+    base_calculo: 'triagem visual sem metragem confirmada; faixa regional ampla com materiais standard/intermediários'
   };
 }
 
@@ -185,7 +186,14 @@ module.exports = async function handler(req, res) {
     const { fields, files } = await parseMultipart(req);
     if (!files.length) return res.status(400).json({ error: 'Envie pelo menos uma foto.' });
 
-    const prompt = `Você é o módulo visual do Orça.AI, um sistema brasileiro de PRÉ-ANÁLISE de serviços de pintura. Sua função é TRIAR o serviço antes da visita presencial. Analise somente o que é visualmente defensável. Não finja precisão, não diagnostique problemas ocultos, não invente metragem, não invente materiais específicos para efeitos decorativos e não trate hipótese como certeza. Se algo não estiver visível, diga que não é possível confirmar.\n\nDados informados:\nCidade: ${fields.city || 'não informada'}\nBairro: ${fields.neighborhood || 'não informado'}\nAmbiente: ${fields.room || 'não informado'}\nEscopo: ${fields.scope === 'parede' ? 'uma parede' : 'cômodo inteiro'}\nIncluir teto: ${fields.ceiling || 'não informado'}\nLargura: ${fields.width || 'não informada'}\nComprimento: ${fields.length || 'não informado'}\nAltura: ${fields.height || 'não informada'}\nPortas: ${fields.doors || 'não informado'}\nJanelas: ${fields.windows || 'não informado'}\nObservações: ${fields.notes || 'nenhuma'}\n\nRetorne SOMENTE JSON válido com esta estrutura exata:\n{\n  "servico": "pintura interna|pintura externa|indefinido",\n  "ambiente": "texto curto",\n  "complexidade": "baixa|media|alta",\n  "estado_parede": "texto curto",\n  "materiais": ["item possivelmente necessário", "item possivelmente necessário"],\n  "pontos_atencao": ["item", "item"],\n  "informacoes_faltantes": ["informação que melhoraria o orçamento"],\n  "visita_recomendada": true,\n  "motivo_visita": "texto curto",\n  "resumo": "explicação objetiva em português, no máximo 3 frases",\n  "confianca_visual": "baixa|media|alta"\n}\n\nCritérios: baixa = superfície aparentemente íntegra e pouca preparação; média = correções, lixamento, pequenas áreas descascando ou mudança de cor que aumente trabalho; alta = descascamento relevante, muitas correções, sinais visíveis de umidade/mofo, difícil acesso ou condição visual muito ruim. Em materiais, prefira termos conservadores como 'massa para correções, se necessária'. Nunca recomende 'massa para efeito decorativo' só porque viu textura. A visita deve ser recomendada quando houver sinais de umidade, textura/revestimento especial, condição ruim, informação importante ausente ou baixa confiança visual.`;
+    // Fase 1 é deliberadamente local. O frontend já fixa Sorocaba, e o backend protege a regra.
+    const city = fields.city || FASE1_CITY;
+    if (normalizeText(city) !== 'sorocaba') {
+      return res.status(400).json({ error: 'Nesta fase, o Orça.AI está calibrado apenas para Sorocaba/SP.' });
+    }
+    fields.city = FASE1_CITY;
+
+    const prompt = `Você é o módulo visual do Orça.AI, um sistema brasileiro de PRÉ-ANÁLISE de serviços de pintura em Sorocaba/SP. Sua função é TRIAR o serviço antes da visita presencial. Analise somente o que é visualmente defensável. Não finja precisão, não diagnostique problemas ocultos, não invente metragem, não invente materiais específicos para efeitos decorativos e não trate hipótese como certeza. Se algo não estiver visível, diga que não é possível confirmar. Para a estimativa comercial da Fase 1, considere materiais de padrão standard/intermediário (${MATERIAL_STANDARD}), sem assumir linhas premium.\n\nDados informados:\nCidade: Sorocaba/SP\nBairro: ${fields.neighborhood || 'não informado'}\nAmbiente: ${fields.room || 'não informado'}\nEscopo: ${fields.scope === 'parede' ? 'uma parede' : 'cômodo inteiro'}\nIncluir teto: ${fields.ceiling || 'não informado'}\nLargura: ${fields.width || 'não informada'}\nComprimento: ${fields.length || 'não informado'}\nAltura: ${fields.height || 'não informada'}\nPortas: ${fields.doors || 'não informado'}\nJanelas: ${fields.windows || 'não informado'}\nObservações: ${fields.notes || 'nenhuma'}\n\nRetorne SOMENTE JSON válido com esta estrutura exata:\n{\n  "servico": "pintura interna|pintura externa|indefinido",\n  "ambiente": "texto curto",\n  "complexidade": "baixa|media|alta",\n  "estado_parede": "texto curto",\n  "materiais": ["item possivelmente necessário", "item possivelmente necessário"],\n  "pontos_atencao": ["item", "item"],\n  "informacoes_faltantes": ["informação que melhoraria o orçamento"],\n  "visita_recomendada": true,\n  "motivo_visita": "texto curto",\n  "resumo": "explicação objetiva em português, no máximo 3 frases",\n  "confianca_visual": "baixa|media|alta"\n}\n\nCritérios: baixa = superfície aparentemente íntegra e pouca preparação; média = correções, lixamento, pequenas áreas descascando ou mudança de cor que aumente trabalho; alta = descascamento relevante, muitas correções, sinais visíveis de umidade/mofo, difícil acesso ou condição visual muito ruim. Em materiais, prefira termos conservadores como 'massa para correções, se necessária'. Nunca recomende 'massa para efeito decorativo' só porque viu textura. A visita deve ser recomendada quando houver sinais de umidade, textura/revestimento especial, condição ruim, informação importante ausente ou baixa confiança visual.`;
 
     const parts = [{ text: prompt }];
     for (const file of files) parts.push({ inlineData: { mimeType: file.mimeType, data: file.buffer.toString('base64') } });
@@ -217,6 +225,7 @@ module.exports = async function handler(req, res) {
       ...analysis,
       ambiente: analysis.ambiente || fields.room || 'Ambiente não definido',
       faixa_preco,
+      fase: 'Sorocaba/SP + materiais standard/intermediários',
       faixa_experimental: true
     });
   } catch (error) {
