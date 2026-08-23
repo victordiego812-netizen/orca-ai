@@ -126,8 +126,8 @@ module.exports = async function handler(req, res) {
       parts.push({ inlineData: { mimeType: file.mimeType, data: file.buffer.toString('base64') } });
     }
 
-    const preferred = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
-    const models = [...new Set([preferred, 'gemini-2.5-flash-lite'])];
+    const preferred = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
+    const models = [...new Set([preferred, 'gemini-3.5-flash-lite', 'gemini-3.5-flash'])];
     let response;
     let lastDetail = '';
 
@@ -137,7 +137,6 @@ module.exports = async function handler(req, res) {
       const detail = await response.text();
       lastDetail = cleanGeminiError(detail, response.status);
       console.error(`Gemini error (${model}):`, detail);
-      // Só tenta fallback em erro de modelo/quota/indisponibilidade.
       if (![404, 429, 500, 503].includes(response.status)) break;
     }
 
