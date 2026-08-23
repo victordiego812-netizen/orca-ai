@@ -22,25 +22,19 @@ function parseMultipart(req) {
       headers: req.headers,
       limits: { files: MAX_FILES, fileSize: MAX_FILE_SIZE, fields: 30 }
     });
-
     bb.on('field', (name, value) => { fields[name] = value; });
     bb.on('file', (name, stream, info) => {
-      if (name !== 'photos' || files.length >= MAX_FILES) {
-        stream.resume();
-        return;
-      }
+      if (name !== 'photos' || files.length >= MAX_FILES) { stream.resume(); return; }
       const chunks = [];
       let truncated = false;
       stream.on('limit', () => { truncated = true; });
       stream.on('data', chunk => chunks.push(chunk));
       stream.on('end', () => {
-        if (!truncated) {
-          files.push({
-            buffer: Buffer.concat(chunks),
-            mimeType: info.mimeType || 'image/jpeg',
-            filename: info.filename || 'foto.jpg'
-          });
-        }
+        if (!truncated) files.push({
+          buffer: Buffer.concat(chunks),
+          mimeType: info.mimeType || 'image/jpeg',
+          filename: info.filename || 'foto.jpg'
+        });
       });
     });
     bb.on('error', reject);
@@ -56,12 +50,10 @@ function estimateArea(fields) {
   const scope = fields.scope || 'comodo';
   const doors = parseIntSafe(fields.doors);
   const windows = parseIntSafe(fields.windows);
-
   if (!width || !height) return null;
 
   let wallArea;
   let ceilingArea = 0;
-
   if (scope === 'parede') {
     wallArea = width * height;
   } else {
@@ -70,10 +62,8 @@ function estimateArea(fields) {
     if (fields.ceiling === 'sim') ceilingArea = width * length;
   }
 
-  // Descontos médios deliberadamente conservadores. Servem só para pré-orçamento.
   const openingsDiscount = (doors * 1.6) + (windows * 1.2);
   const paintArea = Math.max(1, wallArea - openingsDiscount + ceilingArea);
-
   return {
     wallArea: Number(wallArea.toFixed(1)),
     ceilingArea: Number(ceilingArea.toFixed(1)),
@@ -82,71 +72,86 @@ function estimateArea(fields) {
   };
 }
 
-function getExperimentalPrice({ analysis, fields }) {
+function round10(v) { return Math.round(v / 10) * 10; }
+
+function getSorocabaPrice({ analysis, fields }) {
   const area = estimateArea(fields);
   const complexity = analysis.complexidade || 'media';
 
-  // Valores provisórios do MVP, até calibrarmos com preços reais do público-alvo.
+  // Fase 1: referências de mercado 2026 para Sorocaba/SP e interior paulista.
+  // Mão de obra: repintura ~R$12-30/m²; com correções/massa ~R$18-45/m².
+  // Materiais standard: faixa operacional aproximada R$8-18/m², variando por preparo e cobertura.
   const laborPerM2 = {
-    baixa: [16, 23],
-    media: [22, 32],
-    alta: [30, 45]
+    baixa: [12, 20],
+    media: [18, 30],
+    alta: [28, 45]
   };
   const materialPerM2 = {
-    baixa: [7, 11],
+    baixa: [8, 12],
     media: [10, 16],
-    alta: [14, 23]
+    alta: [14, 22]
   };
 
   if (area) {
-    const [laborMin, laborMax] = laborPerM2[complexity] || laborPerM2.media;
-    const [matMin, matMax] = materialPerM2[complexity] || materialPerM2.media;
-    let min = area.paintArea * (laborMin + matMin);
-    let max = area.paintArea * (laborMax + matMax);
+    const [lMin, lMax] = laborPerM2[complexity] || laborPerM2.media;
+    const [mMin, mMax] = materialPerM2[complexity] || materialPerM2.media;
 
-    // Piso mínimo de deslocamento/mobilização do profissional.
-    min = Math.max(min, 300);
-    max = Math.max(max, 450);
+    let laborMin = area.paintArea * lMin;
+    let laborMax = area.paintArea * lMax;
+    let materialMin = area.paintArea * mMin;
+    let materialMax = area.paintArea * mMax;
+
+    // Serviços pequenos costumam ter preço mínimo por deslocamento/preparação.
+    laborMin = Math.max(laborMin, 220);
+    laborMax = Math.max(laborMax, 320);
+    materialMin = Math.max(materialMin, 80);
+    materialMax = Math.max(materialMax, 130);
+
+    const totalMin = laborMin + materialMin;
+    const totalMax = laborMax + materialMax;
 
     return {
-      min: Math.round(min / 10) * 10,
-      max: Math.round(max / 10) * 10,
+      min: round10(totalMin),
+      max: round10(totalMax),
+      mao_obra: { min: round10(laborMin), max: round10(laborMax) },
+      materiais: { min: round10(materialMin), max: round10(materialMax) },
       area_estimada_m2: area.paintArea,
       calculo_por_medidas: true,
-      base_calculo: 'medidas informadas + complexidade visual + faixas experimentais de mão de obra e materiais'
+      regiao_referencia: 'Sorocaba/SP',
+      base_calculo: 'medidas informadas + complexidade visual + faixas de mercado de Sorocaba/SP (2026)'
     };
   }
 
-  // Sem medidas, usamos somente uma faixa ampla de triagem.
+  // Sem metragem: triagem ampla, deliberadamente conservadora.
   const roomBase = {
-    'Sala': [650, 1250],
-    'Quarto': [500, 1000],
-    'Cozinha': [600, 1200],
-    'Banheiro': [400, 850],
-    'Área externa': [800, 1550],
-    'Outro': [550, 1100]
+    'Sala': [700, 1450],
+    'Quarto': [550, 1150],
+    'Cozinha': [650, 1300],
+    'Banheiro': [450, 900],
+    'Área externa': [850, 1700],
+    'Outro': [600, 1250]
   };
-  const factor = { baixa: 0.9, media: 1.15, alta: 1.5 }[complexity] || 1.15;
+  const factor = { baixa: 0.9, media: 1.1, alta: 1.45 }[complexity] || 1.1;
   let [min, max] = roomBase[fields.room] || roomBase.Outro;
   min *= factor;
   max *= factor;
-  if (fields.ceiling === 'sim') { min *= 1.15; max *= 1.25; }
+  if (fields.ceiling === 'sim') { min *= 1.12; max *= 1.2; }
 
+  // Sem medidas, não fingimos separar material e mão de obra com precisão.
   return {
-    min: Math.round(min / 10) * 10,
-    max: Math.round(max / 10) * 10,
+    min: round10(min),
+    max: round10(max),
+    mao_obra: null,
+    materiais: null,
     area_estimada_m2: null,
     calculo_por_medidas: false,
-    base_calculo: 'triagem visual sem metragem confirmada'
+    regiao_referencia: 'Sorocaba/SP',
+    base_calculo: 'triagem visual sem metragem confirmada; faixa regional ampla de Sorocaba/SP (2026)'
   };
 }
 
 function safeJson(text) {
-  const cleaned = String(text || '')
-    .replace(/^```json\s*/i, '')
-    .replace(/^```\s*/i, '')
-    .replace(/```\s*$/i, '')
-    .trim();
+  const cleaned = String(text || '').replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
   return JSON.parse(cleaned);
 }
 
@@ -164,16 +169,10 @@ function cleanGeminiError(detail, status) {
 async function callGemini(model, apiKey, parts) {
   return fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-goog-api-key': apiKey
-    },
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
     body: JSON.stringify({
       contents: [{ role: 'user', parts }],
-      generationConfig: {
-        responseMimeType: 'application/json',
-        temperature: 0.15
-      }
+      generationConfig: { responseMimeType: 'application/json', temperature: 0.15 }
     })
   });
 }
@@ -189,9 +188,7 @@ module.exports = async function handler(req, res) {
     const prompt = `Você é o módulo visual do Orça.AI, um sistema brasileiro de PRÉ-ANÁLISE de serviços de pintura. Sua função é TRIAR o serviço antes da visita presencial. Analise somente o que é visualmente defensável. Não finja precisão, não diagnostique problemas ocultos, não invente metragem, não invente materiais específicos para efeitos decorativos e não trate hipótese como certeza. Se algo não estiver visível, diga que não é possível confirmar.\n\nDados informados:\nCidade: ${fields.city || 'não informada'}\nBairro: ${fields.neighborhood || 'não informado'}\nAmbiente: ${fields.room || 'não informado'}\nEscopo: ${fields.scope === 'parede' ? 'uma parede' : 'cômodo inteiro'}\nIncluir teto: ${fields.ceiling || 'não informado'}\nLargura: ${fields.width || 'não informada'}\nComprimento: ${fields.length || 'não informado'}\nAltura: ${fields.height || 'não informada'}\nPortas: ${fields.doors || 'não informado'}\nJanelas: ${fields.windows || 'não informado'}\nObservações: ${fields.notes || 'nenhuma'}\n\nRetorne SOMENTE JSON válido com esta estrutura exata:\n{\n  "servico": "pintura interna|pintura externa|indefinido",\n  "ambiente": "texto curto",\n  "complexidade": "baixa|media|alta",\n  "estado_parede": "texto curto",\n  "materiais": ["item possivelmente necessário", "item possivelmente necessário"],\n  "pontos_atencao": ["item", "item"],\n  "informacoes_faltantes": ["informação que melhoraria o orçamento"],\n  "visita_recomendada": true,\n  "motivo_visita": "texto curto",\n  "resumo": "explicação objetiva em português, no máximo 3 frases",\n  "confianca_visual": "baixa|media|alta"\n}\n\nCritérios: baixa = superfície aparentemente íntegra e pouca preparação; média = correções, lixamento, pequenas áreas descascando ou mudança de cor que aumente trabalho; alta = descascamento relevante, muitas correções, sinais visíveis de umidade/mofo, difícil acesso ou condição visual muito ruim. Em materiais, prefira termos conservadores como 'massa para correções, se necessária'. Nunca recomende 'massa para efeito decorativo' só porque viu textura. A visita deve ser recomendada quando houver sinais de umidade, textura/revestimento especial, condição ruim, informação importante ausente ou baixa confiança visual.`;
 
     const parts = [{ text: prompt }];
-    for (const file of files) {
-      parts.push({ inlineData: { mimeType: file.mimeType, data: file.buffer.toString('base64') } });
-    }
+    for (const file of files) parts.push({ inlineData: { mimeType: file.mimeType, data: file.buffer.toString('base64') } });
 
     const preferred = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
     const models = [...new Set([preferred, 'gemini-3.5-flash-lite', 'gemini-3.5-flash'])];
@@ -207,19 +204,14 @@ module.exports = async function handler(req, res) {
       if (![404, 429, 500, 503].includes(response.status)) break;
     }
 
-    if (!response || !response.ok) {
-      return res.status(502).json({
-        error: 'A IA não conseguiu analisar as imagens agora.',
-        detalhe: lastDetail || 'Falha ao chamar a API do Gemini.'
-      });
-    }
+    if (!response || !response.ok) return res.status(502).json({ error: 'A IA não conseguiu analisar as imagens agora.', detalhe: lastDetail || 'Falha ao chamar a API do Gemini.' });
 
     const raw = await response.json();
     const text = raw?.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || '';
     if (!text) return res.status(502).json({ error: 'O Gemini respondeu sem conteúdo analisável.' });
 
     const analysis = safeJson(text);
-    const faixa_preco = getExperimentalPrice({ analysis, fields });
+    const faixa_preco = getSorocabaPrice({ analysis, fields });
 
     return res.status(200).json({
       ...analysis,
