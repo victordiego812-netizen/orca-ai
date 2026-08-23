@@ -1,0 +1,9 @@
+{
+  "name": "orca-ai",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MVP do Orça.AI — pré-análise de serviços de pintura por foto",
+  "dependencies": {
+    "busboy": "^1.6.0"
+  }
+}
