@@ -68,28 +68,47 @@ function estimateArea(fields){
   return {wallArea:+wallArea.toFixed(1),ceilingArea:+ceilingArea.toFixed(1),openingsDiscount:+openingsDiscount.toFixed(1),paintArea:+paintArea.toFixed(1)};
 }
 function round10(v){return Math.round(v/10)*10}
-function getSorocabaPrice({analysis,fields}){
+function getSorocabaPrice({analysis,fields,profile}){
   const area=estimateArea(fields); const complexity=analysis.complexidade||'media';
   const laborPerM2={baixa:[12,20],media:[18,30],alta:[28,45]};
   const materialPerM2={baixa:[8,12],media:[10,16],alta:[14,22]};
+  const settings=profile?.pricing_settings||{};
+  const customLabor=Number(settings.labor_per_m2);
+  const hasProPricing=profile?.plan==='pro' && Number.isFinite(customLabor) && customLabor>0;
   if(area){
-    const [lMin,lMax]=laborPerM2[complexity]||laborPerM2.media;
     const [mMin,mMax]=materialPerM2[complexity]||materialPerM2.media;
-    let laborMin=Math.max(area.paintArea*lMin,220), laborMax=Math.max(area.paintArea*lMax,320);
     let materialMin=Math.max(area.paintArea*mMin,80), materialMax=Math.max(area.paintArea*mMax,130);
-    return {min:round10(laborMin+materialMin),max:round10(laborMax+materialMax),mao_obra:{min:round10(laborMin),max:round10(laborMax)},materiais:{min:round10(materialMin),max:round10(materialMax)},area_estimada_m2:area.paintArea,calculo_por_medidas:true,regiao_referencia:'Sorocaba/SP',padrao_material:'standard/intermediário',base_calculo:'medidas informadas + complexidade visual + mão de obra regional + materiais standard/intermediários'};
+    let laborMin,laborMax,base;
+    if(hasProPricing){
+      const complexityFactor={baixa:.85,media:1,alta:1.35}[complexity]||1;
+      const prep=Number(settings.prep_percent)||0;
+      const ceiling=Number(settings.ceiling_percent)||0;
+      const minimum=Math.max(0,Number(settings.minimum_job)||0);
+      let laborBase=area.paintArea*customLabor*complexityFactor;
+      if(complexity!=='baixa') laborBase*=1+(prep/100);
+      if(fields.ceiling==='sim') laborBase*=1+(ceiling/100);
+      laborMin=Math.max(laborBase*.9,minimum);
+      laborMax=Math.max(laborBase*1.15,minimum);
+      base='medidas informadas + complexidade visual + sua mão de obra personalizada + materiais standard/intermediários';
+    }else{
+      const [lMin,lMax]=laborPerM2[complexity]||laborPerM2.media;
+      laborMin=Math.max(area.paintArea*lMin,220); laborMax=Math.max(area.paintArea*lMax,320);
+      base='medidas informadas + complexidade visual + mão de obra regional + materiais standard/intermediários';
+    }
+    return {min:round10(laborMin+materialMin),max:round10(laborMax+materialMax),mao_obra:{min:round10(laborMin),max:round10(laborMax)},materiais:{min:round10(materialMin),max:round10(materialMax)},area_estimada_m2:area.paintArea,calculo_por_medidas:true,regiao_referencia:hasProPricing?'Perfil profissional + Sorocaba/SP':'Sorocaba/SP',padrao_material:'standard/intermediário',base_calculo:base,preco_personalizado:hasProPricing};
   }
   const roomBase={'Sala':[700,1450],'Quarto':[550,1150],'Cozinha':[650,1300],'Banheiro':[450,900],'Área externa':[850,1700],'Outro':[600,1250]};
   const factor={baixa:.9,media:1.1,alta:1.45}[complexity]||1.1; let [min,max]=roomBase[fields.room]||roomBase.Outro;
   min*=factor;max*=factor;if(fields.ceiling==='sim'){min*=1.12;max*=1.2}
-  return {min:round10(min),max:round10(max),mao_obra:null,materiais:null,area_estimada_m2:null,calculo_por_medidas:false,regiao_referencia:'Sorocaba/SP',padrao_material:'standard/intermediário',base_calculo:'triagem visual sem metragem confirmada; faixa regional ampla com materiais standard/intermediários'};
+  return {min:round10(min),max:round10(max),mao_obra:null,materiais:null,area_estimada_m2:null,calculo_por_medidas:false,regiao_referencia:'Sorocaba/SP',padrao_material:'standard/intermediário',base_calculo:hasProPricing?'Sem metragem confirmada; sua regra por m² não pode ser aplicada, então usamos a faixa regional ampla.':'triagem visual sem metragem confirmada; faixa regional ampla com materiais standard/intermediários',preco_personalizado:false};
 }
 function safeJson(text){return JSON.parse(String(text||'').replace(/^```json\s*/i,'').replace(/^```\s*/i,'').replace(/```\s*$/i,'').trim())}
 function cleanGeminiError(detail,status){try{const p=JSON.parse(detail);return `Gemini ${status}: ${p?.error?.message||'erro desconhecido'}`.slice(0,500)}catch{return `Gemini ${status}: ${String(detail||'erro desconhecido').slice(0,350)}`}}
 async function callGemini(model,apiKey,parts){return fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':apiKey},body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:{responseMimeType:'application/json',temperature:.15}})})}
 async function supabaseFetch(path,token,options={}){return fetch(`${SUPABASE_URL}${path}`,{...options,headers:{apikey:SUPABASE_KEY,Authorization:`Bearer ${token}`,'Content-Type':'application/json',...(options.headers||{})}})}
 async function getAuthenticatedUser(token){const r=await supabaseFetch('/auth/v1/user',token);if(!r.ok)return null;return r.json()}
-async function reserveSlot(token){const r=await supabaseFetch('/rest/v1/rpc/reserve_analysis_slot',token,{method:'POST',body:'{}'});if(!r.ok){const t=await r.text();if(t.includes('analysis limit reached')) return {error:'Você atingiu o limite do seu plano Free neste mês.'};return {error:'Não foi possível validar seu limite de análises.'}}const source=await r.json();return {source:typeof source==='string'?source:'monthly'} }
+async function getProfile(token,userId){const r=await supabaseFetch(`/rest/v1/profiles?id=eq.${encodeURIComponent(userId)}&select=plan,pricing_settings,business_name,professional_city`,token);if(!r.ok)return null;const rows=await r.json();return rows?.[0]||null}
+async function reserveSlot(token){const r=await supabaseFetch('/rest/v1/rpc/reserve_analysis_slot',token,{method:'POST',body:'{}'});if(!r.ok){const t=await r.text();if(t.includes('analysis limit reached')) return {error:'Você atingiu o limite de análises do seu plano neste mês.'};return {error:'Não foi possível validar seu limite de análises.'}}const source=await r.json();return {source:typeof source==='string'?source:'monthly'} }
 async function saveAnalysis(token,userId,fields,analysis,price,creditSource){
   const body={user_id:userId,city:'Sorocaba',neighborhood:fields.neighborhood||null,room:fields.room||null,scope:fields.scope||null,include_ceiling:fields.ceiling||null,width:parseNumber(fields.width),length:parseNumber(fields.length),height:parseNumber(fields.height),doors:parseIntSafe(fields.doors),windows:parseIntSafe(fields.windows),notes:fields.notes||null,service:analysis.servico||null,complexity:analysis.complexidade||null,confidence_visual:analysis.confianca_visual||null,wall_state:analysis.estado_parede||null,visit_recommended:!!analysis.visita_recomendada,visit_reason:analysis.motivo_visita||null,summary:analysis.resumo||null,materials:analysis.materiais||[],attention_points:analysis.pontos_atencao||[],missing_info:analysis.informacoes_faltantes||[],price_min:price.min,price_max:price.max,labor_min:price.mao_obra?.min||null,labor_max:price.mao_obra?.max||null,materials_min:price.materiais?.min||null,materials_max:price.materiais?.max||null,estimated_area_m2:price.area_estimada_m2||null,price_basis:price.base_calculo||null,region_reference:price.regiao_referencia||null,material_standard:price.padrao_material||null,credit_source:creditSource};
   const r=await supabaseFetch('/rest/v1/analyses',token,{method:'POST',headers:{Prefer:'return=representation'},body:JSON.stringify(body)});
@@ -104,6 +123,7 @@ module.exports=async function handler(req,res){
   if(!token) return res.status(401).json({error:'Entre na sua conta para analisar.'});
   try{
     const user=await getAuthenticatedUser(token); if(!user?.id) return res.status(401).json({error:'Sua sessão expirou. Entre novamente.'});
+    const profile=await getProfile(token,user.id);
     const slot=await reserveSlot(token); if(slot.error) return res.status(403).json({error:slot.error});
     const {fields,files,oversized}=await parseMultipart(req);
     if(oversized) return res.status(400).json({error:'Uma das fotos ficou acima de 4 MB mesmo após compressão.'});
@@ -118,7 +138,7 @@ module.exports=async function handler(req,res){
     for(const model of models){response=await callGemini(model,process.env.GEMINI_API_KEY,parts);if(response.ok)break;const d=await response.text();lastDetail=cleanGeminiError(d,response.status);if(![404,429,500,503].includes(response.status))break}
     if(!response||!response.ok) return res.status(502).json({error:'A IA não conseguiu analisar as imagens agora.',detalhe:lastDetail});
     const raw=await response.json(); const text=raw?.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join('')||''; if(!text)return res.status(502).json({error:'A IA respondeu sem conteúdo analisável.'});
-    const analysis=safeJson(text); const faixa_preco=getSorocabaPrice({analysis,fields});
+    const analysis=safeJson(text); const faixa_preco=getSorocabaPrice({analysis,fields,profile});
     const saved=await saveAnalysis(token,user.id,fields,analysis,faixa_preco,slot.source);
     return res.status(200).json({...analysis,ambiente:analysis.ambiente||fields.room||'Ambiente não definido',faixa_preco,analysis_id:saved?.id||null,fase:'Sorocaba/SP + materiais standard/intermediários'});
   }catch(error){console.error(error);return res.status(500).json({error:error.message||'Falha ao processar a análise.'})}
