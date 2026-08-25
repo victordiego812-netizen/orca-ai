@@ -79,22 +79,22 @@ async function buildPdf({ analysis, profile, clientName, validityDays, note, pro
   const lineColor = rgb(0.88, 0.90, 0.93);
   const pale = rgb(0.98, 0.98, 0.99);
   const pageSize = [595.28, 841.89];
-  const margin = 48;
+  const margin = 38;
   const maxWidth = pageSize[0] - margin * 2;
   let page = pdf.addPage(pageSize);
-  let y = pageSize[1] - 52;
+  let y = pageSize[1] - 40;
 
   const newPage = () => {
     page = pdf.addPage(pageSize);
-    y = pageSize[1] - 52;
+    y = pageSize[1] - 40;
   };
-  const ensure = (need = 60) => { if (y < margin + need) newPage(); };
-  const text = (value, size = 10, opts = {}) => {
+  const ensure = (need = 48) => { if (y < margin + need) newPage(); };
+  const text = (value, size = 9, opts = {}) => {
     const font = opts.bold ? bold : regular;
     const color = opts.color || ink;
     const lines = wrapText(value, font, size, opts.width || maxWidth);
-    const lh = opts.lineHeight || size * 1.35;
-    ensure(lines.length * lh + 8);
+    const lh = opts.lineHeight || size * 1.25;
+    ensure(lines.length * lh + 6);
     for (const line of lines) {
       page.drawText(line, { x: opts.x || margin, y, size, font, color });
       y -= lh;
@@ -102,114 +102,117 @@ async function buildPdf({ analysis, profile, clientName, validityDays, note, pro
     if (opts.after) y -= opts.after;
   };
   const section = title => {
-    ensure(46);
+    ensure(34);
+    y -= 3;
+    page.drawText(cleanText(title, 80), { x: margin, y, size: 10.5, font: bold, color: ink });
     y -= 6;
-    page.drawText(cleanText(title, 80), { x: margin, y, size: 12, font: bold, color: ink });
-    y -= 9;
-    page.drawLine({ start: { x: margin, y }, end: { x: pageSize[0] - margin, y }, thickness: 1, color: lineColor });
-    y -= 18;
+    page.drawLine({ start: { x: margin, y }, end: { x: pageSize[0] - margin, y }, thickness: .8, color: lineColor });
+    y -= 12;
   };
-  const bulletList = items => {
-    const arr = Array.isArray(items) ? items.slice(0, 10) : [];
-    if (!arr.length) return text('Nenhum item adicional.', 9, { color: muted, after: 4 });
+  const bulletList = (items, maxItems = 6) => {
+    const arr = Array.isArray(items) ? items.slice(0, maxItems) : [];
+    if (!arr.length) return text('Nenhum item adicional.', 8.2, { color: muted, after: 2 });
     for (const item of arr) {
-      ensure(30);
-      const lines = wrapText(cleanText(item, 220), regular, 9, maxWidth - 16);
-      page.drawText('-', { x: margin, y, size: 9, font: bold, color: orange });
+      ensure(22);
+      const lines = wrapText(cleanText(item, 220), regular, 8.2, maxWidth - 14);
+      page.drawText('•', { x: margin, y, size: 8.5, font: bold, color: orange });
       for (let i = 0; i < lines.length; i++) {
-        page.drawText(lines[i], { x: margin + 14, y, size: 9, font: regular, color: ink });
-        y -= 12;
+        page.drawText(lines[i], { x: margin + 12, y, size: 8.2, font: regular, color: ink });
+        y -= 10;
       }
-      y -= 2;
+      y -= 1;
     }
   };
 
-  page.drawText('ORCA.AI', { x: margin, y, size: 18, font: bold, color: ink });
-  page.drawText('PROPOSTA DE PRE-ORCAMENTO', { x: margin, y: y - 26, size: 22, font: bold, color: orange });
-  y -= 60;
+  page.drawText('Orça.AI', { x: margin, y, size: 18, font: bold, color: ink });
+  page.drawText('PROPOSTA DE PRÉ-ORÇAMENTO', { x: margin, y: y - 23, size: 19, font: bold, color: orange });
+  y -= 51;
 
   const business = cleanText(profile.business_name || profile.full_name || 'Profissional de pintura', 120);
-  text(business, 14, { bold: true, after: 2 });
-  if (profile.whatsapp) text(`WhatsApp: ${cleanText(profile.whatsapp, 40)}`, 9, { color: muted, after: 2 });
-  text(`Sorocaba/SP | Proposta ${proposalId ? cleanText(proposalId, 12).toUpperCase() : ''}`, 9, { color: muted, after: 14 });
+  text(business, 12.5, { bold: true, after: 1 });
+  const contactBits = [];
+  if (profile.whatsapp) contactBits.push(`WhatsApp: ${cleanText(profile.whatsapp, 40)}`);
+  contactBits.push('Sorocaba/SP');
+  if (proposalId) contactBits.push(`Proposta ${cleanText(proposalId, 12).toUpperCase()}`);
+  text(contactBits.join('  •  '), 8.4, { color: muted, after: 9 });
 
   if (clientName) {
-    section('Cliente');
-    text(cleanText(clientName, 120), 11, { bold: true, after: 4 });
+    text('Cliente', 8.5, { bold: true, color: muted, after: 1 });
+    text(cleanText(clientName, 120), 10.5, { bold: true, after: 7 });
   }
 
-  section('Servico analisado');
-  text(`${cleanText(analysis.room || 'Pintura', 60)} - ${analysis.scope === 'parede' ? 'uma parede' : 'comodo inteiro'}`, 11, { bold: true, after: 3 });
-  text(`Local: ${cleanText(analysis.neighborhood || 'Bairro nao informado', 120)}, Sorocaba/SP`, 9, { color: muted });
-  text(`Complexidade visual: ${cleanText(analysis.complexity || 'nao definida', 30)}`, 9, { color: muted });
-  if (analysis.estimated_area_m2) text(`Area estimada de pintura: ${analysis.estimated_area_m2} m2`, 9, { color: muted, after: 8 });
+  section('Serviço analisado');
+  text(`${cleanText(analysis.room || 'Pintura', 60)} - ${analysis.scope === 'parede' ? 'uma parede' : 'cômodo inteiro'}`, 10.5, { bold: true, after: 2 });
+  text(`Local: ${cleanText(analysis.neighborhood || 'Bairro não informado', 120)}, Sorocaba/SP`, 8.5, { color: muted });
+  text(`Complexidade visual: ${cleanText(analysis.complexity || 'não definida', 30)}`, 8.5, { color: muted });
+  if (analysis.estimated_area_m2) text(`Área estimada de pintura: ${analysis.estimated_area_m2} m²`, 8.5, { color: muted, after: 4 });
 
   section('Faixa inicial sugerida');
-  ensure(90);
-  page.drawRectangle({ x: margin, y: y - 60, width: maxWidth, height: 72, color: pale, borderColor: lineColor, borderWidth: 1 });
-  page.drawText(`${money(analysis.price_min)} a ${money(analysis.price_max)}`, { x: margin + 18, y: y - 18, size: 20, font: bold, color: ink });
-  page.drawText('Faixa de pre-orcamento remoto', { x: margin + 18, y: y - 40, size: 9, font: regular, color: muted });
-  y -= 84;
-  if (analysis.labor_min != null) text(`Mao de obra estimada: ${money(analysis.labor_min)} a ${money(analysis.labor_max)}`, 10, { bold: true });
-  if (analysis.materials_min != null) text(`Materiais estimados: ${money(analysis.materials_min)} a ${money(analysis.materials_max)}`, 10, { bold: true, after: 6 });
+  ensure(70);
+  page.drawRectangle({ x: margin, y: y - 48, width: maxWidth, height: 58, color: pale, borderColor: lineColor, borderWidth: 1 });
+  page.drawText(`${money(analysis.price_min)} a ${money(analysis.price_max)}`, { x: margin + 15, y: y - 15, size: 18, font: bold, color: ink });
+  page.drawText('Faixa de pré-orçamento remoto', { x: margin + 15, y: y - 34, size: 8.2, font: regular, color: muted });
+  y -= 63;
+  if (analysis.labor_min != null) text(`Mão de obra estimada: ${money(analysis.labor_min)} a ${money(analysis.labor_max)}`, 8.8, { bold: true });
+  if (analysis.materials_min != null) text(`Materiais estimados: ${money(analysis.materials_min)} a ${money(analysis.materials_max)}`, 8.8, { bold: true, after: 3 });
 
-  section('Resumo da analise');
-  text(cleanText(analysis.summary || 'Pre-analise gerada a partir das fotos e dados enviados.', 700), 10, { after: 8 });
+  section('Resumo da análise');
+  text(cleanText(analysis.summary || 'Pré-análise gerada a partir das fotos e dados enviados.', 620), 8.8, { after: 5 });
   if (analysis.wall_state) {
-    text('Estado aparente', 10, { bold: true, after: 2 });
-    text(cleanText(analysis.wall_state, 400), 9, { color: muted, after: 8 });
+    text('Estado aparente', 8.8, { bold: true, after: 1 });
+    text(cleanText(analysis.wall_state, 320), 8.2, { color: muted, after: 5 });
   }
 
-  section('Materiais possivelmente necessarios');
-  bulletList(analysis.materials);
-  section('Pontos de atencao');
-  bulletList(analysis.attention_points);
+  section('Materiais possivelmente necessários');
+  bulletList(analysis.materials, 6);
+  section('Pontos de atenção');
+  bulletList(analysis.attention_points, 5);
 
   if (note) {
-    section('Observacao do profissional');
-    text(cleanText(note, 800), 9, { after: 8 });
+    section('Observação do profissional');
+    text(cleanText(note, 500), 8.4, { after: 4 });
   }
 
-  section('Validade e condicoes');
+  section('Validade e condições');
   const created = new Date();
   const validUntil = new Date(created.getTime() + validityDays * 86400000);
-  text(`Validade desta proposta: ${validityDays} dias, ate ${validUntil.toLocaleDateString('pt-BR')}.`, 9, { bold: true, after: 5 });
-  text('Este documento e um pre-orcamento remoto baseado nas fotos, medidas e informacoes fornecidas. Problemas ocultos, condicoes reais do local, alteracoes de escopo e escolha final de materiais podem alterar o valor. O preco definitivo deve ser confirmado pelo profissional.', 8.5, { color: muted, after: 10 });
+  text(`Validade: ${validityDays} dias, até ${validUntil.toLocaleDateString('pt-BR')}.`, 8.5, { bold: true, after: 3 });
+  text('Pré-orçamento remoto baseado nas fotos, medidas e informações fornecidas. Problemas ocultos, condições reais do local, mudanças de escopo ou materiais podem alterar o valor. O preço definitivo deve ser confirmado pelo profissional.', 7.7, { color: muted, after: 5 });
 
-  ensure(40);
-  y -= 8;
-  page.drawLine({ start: { x: margin, y }, end: { x: pageSize[0] - margin, y }, thickness: 1, color: lineColor });
-  y -= 18;
-  text('Gerado pelo Orça.AI', 8, { color: muted });
+  ensure(26);
+  y -= 3;
+  page.drawLine({ start: { x: margin, y }, end: { x: pageSize[0] - margin, y }, thickness: .8, color: lineColor });
+  y -= 13;
+  text('Gerado pelo Orça.AI', 7.5, { color: muted });
 
-  pdf.setTitle('Proposta de pre-orcamento Orça.AI');
+  pdf.setTitle('Proposta de pré-orçamento Orça.AI');
   pdf.setAuthor(business);
-  pdf.setSubject('Pre-orcamento de pintura residencial');
+  pdf.setSubject('Pré-orçamento de pintura residencial');
   return Buffer.from(await pdf.save());
 }
 
 module.exports = async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Metodo nao permitido.' });
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Método não permitido.' });
   const auth = String(req.headers.authorization || '');
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
   if (!token) return res.status(401).json({ error: 'Entre na sua conta para gerar a proposta.' });
 
   try {
     const user = await getUser(token);
-    if (!user?.id) return res.status(401).json({ error: 'Sua sessao expirou. Entre novamente.' });
+    if (!user?.id) return res.status(401).json({ error: 'Sua sessão expirou. Entre novamente.' });
     const profile = await getProfile(token, user.id);
-    if (!profile) return res.status(404).json({ error: 'Perfil nao encontrado.' });
-    if (profile.plan !== 'pro') return res.status(403).json({ error: 'A proposta em PDF e um recurso do plano Pro.' });
+    if (!profile) return res.status(404).json({ error: 'Perfil não encontrado.' });
+    if (profile.plan !== 'pro') return res.status(403).json({ error: 'A proposta em PDF é um recurso do plano Pro.' });
 
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
     const analysisId = String(body.analysis_id || '');
-    if (!isUuid(analysisId)) return res.status(400).json({ error: 'Analise invalida.' });
+    if (!isUuid(analysisId)) return res.status(400).json({ error: 'Análise inválida.' });
     const clientName = cleanText(body.client_name, 120);
-    const note = cleanText(body.note, 800);
+    const note = cleanText(body.note, 500);
     const validityDays = Math.min(60, Math.max(1, Number.parseInt(body.validity_days, 10) || 7));
 
     const analysis = await getAnalysis(token, analysisId);
-    if (!analysis || analysis.user_id !== user.id) return res.status(404).json({ error: 'Analise nao encontrada.' });
+    if (!analysis || analysis.user_id !== user.id) return res.status(404).json({ error: 'Análise não encontrada.' });
 
     const proposal = await saveProposal(token, {
       user_id: user.id,
@@ -226,6 +229,6 @@ module.exports = async function handler(req, res) {
     return res.status(200).send(pdf);
   } catch (error) {
     console.error('gerar-proposta:', error);
-    return res.status(500).json({ error: 'Nao foi possivel gerar a proposta agora.' });
+    return res.status(500).json({ error: 'Não foi possível gerar a proposta agora.' });
   }
 };
