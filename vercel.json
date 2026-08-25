@@ -2,6 +2,9 @@
   "functions": {
     "api/analisar.js": {
       "maxDuration": 30
+    },
+    "api/gerar-proposta.js": {
+      "maxDuration": 15
     }
   }
 }
